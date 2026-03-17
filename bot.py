@@ -20,7 +20,7 @@ users = {}
 payments = {}
 
 # 🔥 ВСТАВЬ СЮДА СВОЮ ССЫЛКУ
-PROXY_LINK = tg://proxy?server=64.188.124.119&port=443&secret=6fe2b38caff28f65afa6e25746446372
+PROXY_LINK = "https://t.me/proxy?server=64.188.124.119&port=443&secret=6fe2b38caff28f65afa6e25746446372"
 
 def create_payment(user_id):
     payment = Payment.create({
