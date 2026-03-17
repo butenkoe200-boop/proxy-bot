@@ -27,7 +27,7 @@ def create_payment(user_id):
         "amount": {"value": "149.00", "currency": "RUB"},
         "confirmation": {
             "type": "redirect",
-            "return_url": https://t.me/antibloktg_bot
+            "return_url": "return_url": "https://t.me/antibloktg_bot"
         },
         "capture": True,
         "description": str(user_id)
