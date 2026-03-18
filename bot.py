@@ -25,6 +25,8 @@ cursor = conn.cursor()
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
+    username TEXT,
+    first_name TEXT,
     expire TEXT
 )
 """)
@@ -39,7 +41,7 @@ CREATE TABLE IF NOT EXISTS payments (
 
 conn.commit()
 
-# ===== ПРОКСИ (НОВЫЕ) =====
+# ===== ПРОКСИ =====
 PROXIES = [
 "https://t.me/proxy?server=213.165.42.119&port=443&secret=5c95fa91e3ba74956468698b3c3ae6ae",
 "https://t.me/proxy?server=64.188.124.119&port=443&secret=0feeb7f54cbb7b09c6426c1f1cb984b8"
@@ -56,22 +58,31 @@ def main_kb():
 
 def admin_kb():
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("👥 Пользователи", callback_data="users"))
+    kb.add(types.InlineKeyboardButton("👥 Все пользователи", callback_data="all_users"))
+    kb.add(types.InlineKeyboardButton("✅ Активные", callback_data="active"))
+    kb.add(types.InlineKeyboardButton("❌ Неактивные", callback_data="expired"))
     kb.add(types.InlineKeyboardButton("💰 Статистика", callback_data="stats"))
+    kb.add(types.InlineKeyboardButton("🔍 Найти пользователя", callback_data="find"))
     return kb
 
 # ===== СТАРТ =====
 @dp.message_handler(commands=['start'])
 async def start(message: types.Message):
-    cursor.execute("INSERT OR IGNORE INTO users (user_id, expire) VALUES (?, ?)", (message.from_user.id, "0"))
+
+    cursor.execute("""
+    INSERT OR REPLACE INTO users (user_id, username, first_name, expire)
+    VALUES (?, ?, ?, COALESCE((SELECT expire FROM users WHERE user_id=?), '0'))
+    """, (
+        message.from_user.id,
+        message.from_user.username,
+        message.from_user.first_name,
+        message.from_user.id
+    ))
+
     conn.commit()
 
     await message.answer(
-        "🚀 Telegram без блокировок\n\n"
-        "— Работает на мобильном\n"
-        "— Без лагов\n"
-        "— Несколько серверов\n\n"
-        "Нажми ниже 👇",
+        "🚀 Telegram без блокировок\n\nНажми ниже 👇",
         reply_markup=main_kb()
     )
 
@@ -96,16 +107,11 @@ async def buy(callback: types.CallbackQuery):
 
     await bot.send_message(callback.from_user.id, "Оплати доступ:", reply_markup=kb)
 
-# ===== ВЫДАЧА ДОСТУПА =====
+# ===== ВЫДАЧА =====
 def get_proxies_text(expire):
-    text = "✅ Доступ активирован\n\n"
-    text += f"📅 До: {expire}\n\n"
-    text += "🔑 Подключись:\n\n"
-
-    for i, p in enumerate(PROXIES, start=1):
-        text += f"{i}️⃣ {p}\n\n"
-
-    text += "🛠 Поддержка: https://t.me/suport_antibloktg"
+    text = f"✅ Доступ до {expire}\n\n🔑 Подключись:\n\n"
+    for p in PROXIES:
+        text += p + "\n\n"
     return text
 
 # ===== ПРОВЕРКА ОПЛАТ =====
@@ -127,16 +133,11 @@ async def check_payments():
                     new_expire = datetime.now() + timedelta(days=30)
 
                 cursor.execute("UPDATE users SET expire=? WHERE user_id=?", (new_expire.isoformat(), user_id))
-
-                cursor.execute("INSERT INTO payments VALUES (?, ?, ?)",
-                               (user_id, 149, datetime.now().isoformat()))
+                cursor.execute("INSERT INTO payments VALUES (?, ?, ?)", (user_id, 149, datetime.now().isoformat()))
 
                 conn.commit()
 
-                await bot.send_message(
-                    user_id,
-                    get_proxies_text(new_expire)
-                )
+                await bot.send_message(user_id, get_proxies_text(new_expire))
 
                 del payments[pid]
 
@@ -147,31 +148,54 @@ async def check_payments():
 async def admin(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
-
     await message.answer("⚙️ Админ панель", reply_markup=admin_kb())
 
-# ===== СПИСОК ПОЛЬЗОВАТЕЛЕЙ =====
-@dp.callback_query_handler(lambda c: c.data == "users")
-async def users(callback: types.CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
-        return
-
-    cursor.execute("SELECT user_id, expire FROM users")
+# ===== ВСЕ ПОЛЬЗОВАТЕЛИ =====
+@dp.callback_query_handler(lambda c: c.data == "all_users")
+async def all_users(callback: types.CallbackQuery):
+    cursor.execute("SELECT user_id, username, expire FROM users")
     data = cursor.fetchall()
 
-    text = "👥 Пользователи:\n\n"
+    text = "👥 Все пользователи:\n\n"
+    for u in data[:30]:
+        username = f"@{u[1]}" if u[1] else "нет"
+        text += f"{u[0]} | {username} | {u[2]}\n"
 
-    for u in data[:20]:
-        text += f"{u[0]} | {u[1]}\n"
+    await bot.send_message(callback.from_user.id, text)
+
+# ===== АКТИВНЫЕ =====
+@dp.callback_query_handler(lambda c: c.data == "active")
+async def active(callback: types.CallbackQuery):
+    now = datetime.now().isoformat()
+
+    cursor.execute("SELECT user_id, username, expire FROM users WHERE expire > ?", (now,))
+    data = cursor.fetchall()
+
+    text = "✅ Активные:\n\n"
+    for u in data[:30]:
+        username = f"@{u[1]}" if u[1] else "нет"
+        text += f"{u[0]} | {username}\n"
+
+    await bot.send_message(callback.from_user.id, text)
+
+# ===== НЕАКТИВНЫЕ =====
+@dp.callback_query_handler(lambda c: c.data == "expired")
+async def expired(callback: types.CallbackQuery):
+    now = datetime.now().isoformat()
+
+    cursor.execute("SELECT user_id, username FROM users WHERE expire <= ?", (now,))
+    data = cursor.fetchall()
+
+    text = "❌ Неактивные:\n\n"
+    for u in data[:30]:
+        username = f"@{u[1]}" if u[1] else "нет"
+        text += f"{u[0]} | {username}\n"
 
     await bot.send_message(callback.from_user.id, text)
 
 # ===== СТАТИСТИКА =====
 @dp.callback_query_handler(lambda c: c.data == "stats")
 async def stats(callback: types.CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
-        return
-
     cursor.execute("SELECT COUNT(*) FROM users")
     users_count = cursor.fetchone()[0]
 
@@ -181,14 +205,31 @@ async def stats(callback: types.CallbackQuery):
     pays = p[0] if p[0] else 0
     money = p[1] if p[1] else 0
 
-    text = (
-        f"📊 Статистика\n\n"
-        f"👥 Пользователей: {users_count}\n"
-        f"💳 Оплат: {pays}\n"
-        f"💰 Доход: {money} RUB"
-    )
+    text = f"📊\nПользователей: {users_count}\nОплат: {pays}\nДоход: {money} RUB"
 
     await bot.send_message(callback.from_user.id, text)
+
+# ===== ПОИСК =====
+@dp.callback_query_handler(lambda c: c.data == "find")
+async def find(callback: types.CallbackQuery):
+    await bot.send_message(callback.from_user.id, "Введи ID пользователя")
+
+@dp.message_handler(lambda m: m.text.isdigit())
+async def find_user(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    user_id = int(message.text)
+
+    cursor.execute("SELECT user_id, username, expire FROM users WHERE user_id=?", (user_id,))
+    u = cursor.fetchone()
+
+    if not u:
+        await message.answer("❌ Не найден")
+        return
+
+    username = f"@{u[1]}" if u[1] else "нет"
+    await message.answer(f"👤 {u[0]}\n{username}\nДо: {u[2]}")
 
 # ===== ЗАПУСК =====
 if __name__ == "__main__":
