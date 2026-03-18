@@ -54,7 +54,7 @@ payments = {}
 # ===== КНОПКИ =====
 def main_kb():
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("💳 Купить / Продлить (299₽)", callback_data="buy"))
+    kb.add(types.InlineKeyboardButton("💳 Купить / Продлить (149₽)", callback_data="buy"))
     kb.add(types.InlineKeyboardButton("🛠 Поддержка", url="https://t.me/suport_antibloktg"))
     return kb
 
@@ -95,7 +95,7 @@ async def start(message: types.Message):
 # ===== ОПЛАТА =====
 def create_payment(user_id):
     payment = Payment.create({
-        "amount": {"value": "299.00", "currency": "RUB"},
+        "amount": {"value": "149.00", "currency": "RUB"},
         "confirmation": {"type": "redirect", "return_url": "https://t.me/antibloktg_bot"},
         "capture": True,
         "description": str(user_id)
@@ -152,7 +152,7 @@ async def check_payments():
                 WHERE user_id=?
                 """, (new_expire.isoformat(), user_id))
 
-                cursor.execute("INSERT INTO payments VALUES (?, ?, ?)", (user_id, 299, datetime.now().isoformat()))
+                cursor.execute("INSERT INTO payments VALUES (?, ?, ?)", (user_id, 149, datetime.now().isoformat()))
 
                 conn.commit()
 
@@ -164,7 +164,7 @@ async def check_payments():
 
         await asyncio.sleep(10)
 
-# ===== УВЕДОМЛЕНИЯ БЕЗ СПАМА =====
+# ===== УВЕДОМЛЕНИЯ =====
 async def reminders():
     while True:
         cursor.execute("SELECT user_id, expire, notified_2days, notified_expired FROM users WHERE expire != '0'")
@@ -176,25 +176,23 @@ async def reminders():
             user_id, exp, n2, ne = u
             expire = datetime.fromisoformat(exp)
 
-            # за 2 дня
             if 0 < (expire - now).days <= 2 and n2 == 0:
                 await bot.send_message(
                     user_id,
                     "⚠️ Осталось меньше 2 дней доступа\n\nПродли сейчас 👇",
                     reply_markup=types.InlineKeyboardMarkup().add(
-                        types.InlineKeyboardButton("💳 Продлить (299₽)", callback_data="buy")
+                        types.InlineKeyboardButton("💳 Продлить (149₽)", callback_data="buy")
                     )
                 )
                 cursor.execute("UPDATE users SET notified_2days=1 WHERE user_id=?", (user_id,))
                 conn.commit()
 
-            # истек
             if expire < now and ne == 0:
                 await bot.send_message(
                     user_id,
                     "❌ Доступ закончился\n\nПродли доступ 👇",
                     reply_markup=types.InlineKeyboardMarkup().add(
-                        types.InlineKeyboardButton("💳 Продлить (299₽)", callback_data="buy")
+                        types.InlineKeyboardButton("💳 Продлить (149₽)", callback_data="buy")
                     )
                 )
                 cursor.execute("UPDATE users SET notified_expired=1 WHERE user_id=?", (user_id,))
