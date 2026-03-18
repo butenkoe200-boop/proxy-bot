@@ -27,7 +27,9 @@ CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
     username TEXT,
     first_name TEXT,
-    expire TEXT
+    expire TEXT,
+    notified_2days INTEGER DEFAULT 0,
+    notified_expired INTEGER DEFAULT 0
 )
 """)
 
@@ -52,7 +54,7 @@ payments = {}
 # ===== КНОПКИ =====
 def main_kb():
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("💳 Купить / Продлить", callback_data="buy"))
+    kb.add(types.InlineKeyboardButton("💳 Купить / Продлить (299₽)", callback_data="buy"))
     kb.add(types.InlineKeyboardButton("🛠 Поддержка", url="https://t.me/suport_antibloktg"))
     return kb
 
@@ -82,14 +84,18 @@ async def start(message: types.Message):
     conn.commit()
 
     await message.answer(
-        "🚀 Telegram без блокировок\n\nНажми ниже 👇",
+        "🚀 Telegram без блокировок\n\n"
+        "— Подключение за 30 секунд\n"
+        "— Работает на мобильном\n"
+        "— Без лагов\n\n"
+        "Нажми ниже 👇",
         reply_markup=main_kb()
     )
 
-# ===== ПОКУПКА =====
+# ===== ОПЛАТА =====
 def create_payment(user_id):
     payment = Payment.create({
-        "amount": {"value": "149.00", "currency": "RUB"},
+        "amount": {"value": "299.00", "currency": "RUB"},
         "confirmation": {"type": "redirect", "return_url": "https://t.me/antibloktg_bot"},
         "capture": True,
         "description": str(user_id)
@@ -108,11 +114,19 @@ async def buy(callback: types.CallbackQuery):
     await bot.send_message(callback.from_user.id, "Оплати доступ:", reply_markup=kb)
 
 # ===== ВЫДАЧА =====
-def get_proxies_text(expire):
-    text = f"✅ Доступ до {expire}\n\n🔑 Подключись:\n\n"
-    for p in PROXIES:
-        text += p + "\n\n"
-    return text
+def get_proxies_message(expire):
+    text = (
+        f"✅ Доступ активирован\n\n"
+        f"📅 До: {expire}\n\n"
+        f"👇 Выбери сервер:"
+    )
+
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("🚀 Основной сервер", url=PROXIES[0]))
+    kb.add(types.InlineKeyboardButton("🛟 Резервный сервер", url=PROXIES[1]))
+    kb.add(types.InlineKeyboardButton("🛠 Поддержка", url="https://t.me/suport_antibloktg"))
+
+    return text, kb
 
 # ===== ПРОВЕРКА ОПЛАТ =====
 async def check_payments():
@@ -132,16 +146,61 @@ async def check_payments():
                 else:
                     new_expire = datetime.now() + timedelta(days=30)
 
-                cursor.execute("UPDATE users SET expire=? WHERE user_id=?", (new_expire.isoformat(), user_id))
-                cursor.execute("INSERT INTO payments VALUES (?, ?, ?)", (user_id, 149, datetime.now().isoformat()))
+                cursor.execute("""
+                UPDATE users 
+                SET expire=?, notified_2days=0, notified_expired=0 
+                WHERE user_id=?
+                """, (new_expire.isoformat(), user_id))
+
+                cursor.execute("INSERT INTO payments VALUES (?, ?, ?)", (user_id, 299, datetime.now().isoformat()))
 
                 conn.commit()
 
-                await bot.send_message(user_id, get_proxies_text(new_expire))
+                text, kb = get_proxies_message(new_expire)
+
+                await bot.send_message(user_id, text, reply_markup=kb)
 
                 del payments[pid]
 
         await asyncio.sleep(10)
+
+# ===== УВЕДОМЛЕНИЯ БЕЗ СПАМА =====
+async def reminders():
+    while True:
+        cursor.execute("SELECT user_id, expire, notified_2days, notified_expired FROM users WHERE expire != '0'")
+        users = cursor.fetchall()
+
+        now = datetime.now()
+
+        for u in users:
+            user_id, exp, n2, ne = u
+            expire = datetime.fromisoformat(exp)
+
+            # за 2 дня
+            if 0 < (expire - now).days <= 2 and n2 == 0:
+                await bot.send_message(
+                    user_id,
+                    "⚠️ Осталось меньше 2 дней доступа\n\nПродли сейчас 👇",
+                    reply_markup=types.InlineKeyboardMarkup().add(
+                        types.InlineKeyboardButton("💳 Продлить (299₽)", callback_data="buy")
+                    )
+                )
+                cursor.execute("UPDATE users SET notified_2days=1 WHERE user_id=?", (user_id,))
+                conn.commit()
+
+            # истек
+            if expire < now and ne == 0:
+                await bot.send_message(
+                    user_id,
+                    "❌ Доступ закончился\n\nПродли доступ 👇",
+                    reply_markup=types.InlineKeyboardMarkup().add(
+                        types.InlineKeyboardButton("💳 Продлить (299₽)", callback_data="buy")
+                    )
+                )
+                cursor.execute("UPDATE users SET notified_expired=1 WHERE user_id=?", (user_id,))
+                conn.commit()
+
+        await asyncio.sleep(3600)
 
 # ===== АДМИН =====
 @dp.message_handler(commands=['admin'])
@@ -150,7 +209,6 @@ async def admin(message: types.Message):
         return
     await message.answer("⚙️ Админ панель", reply_markup=admin_kb())
 
-# ===== ВСЕ ПОЛЬЗОВАТЕЛИ =====
 @dp.callback_query_handler(lambda c: c.data == "all_users")
 async def all_users(callback: types.CallbackQuery):
     cursor.execute("SELECT user_id, username, expire FROM users")
@@ -163,12 +221,10 @@ async def all_users(callback: types.CallbackQuery):
 
     await bot.send_message(callback.from_user.id, text)
 
-# ===== АКТИВНЫЕ =====
 @dp.callback_query_handler(lambda c: c.data == "active")
-async def active(callback: types.CallbackQuery):
+async def active(callback):
     now = datetime.now().isoformat()
-
-    cursor.execute("SELECT user_id, username, expire FROM users WHERE expire > ?", (now,))
+    cursor.execute("SELECT user_id, username FROM users WHERE expire > ?", (now,))
     data = cursor.fetchall()
 
     text = "✅ Активные:\n\n"
@@ -178,11 +234,9 @@ async def active(callback: types.CallbackQuery):
 
     await bot.send_message(callback.from_user.id, text)
 
-# ===== НЕАКТИВНЫЕ =====
 @dp.callback_query_handler(lambda c: c.data == "expired")
-async def expired(callback: types.CallbackQuery):
+async def expired(callback):
     now = datetime.now().isoformat()
-
     cursor.execute("SELECT user_id, username FROM users WHERE expire <= ?", (now,))
     data = cursor.fetchall()
 
@@ -193,9 +247,8 @@ async def expired(callback: types.CallbackQuery):
 
     await bot.send_message(callback.from_user.id, text)
 
-# ===== СТАТИСТИКА =====
 @dp.callback_query_handler(lambda c: c.data == "stats")
-async def stats(callback: types.CallbackQuery):
+async def stats(callback):
     cursor.execute("SELECT COUNT(*) FROM users")
     users_count = cursor.fetchone()[0]
 
@@ -205,22 +258,19 @@ async def stats(callback: types.CallbackQuery):
     pays = p[0] if p[0] else 0
     money = p[1] if p[1] else 0
 
-    text = f"📊\nПользователей: {users_count}\nОплат: {pays}\nДоход: {money} RUB"
+    await bot.send_message(callback.from_user.id,
+        f"📊\nПользователей: {users_count}\nОплат: {pays}\nДоход: {money} RUB")
 
-    await bot.send_message(callback.from_user.id, text)
-
-# ===== ПОИСК =====
 @dp.callback_query_handler(lambda c: c.data == "find")
-async def find(callback: types.CallbackQuery):
+async def find(callback):
     await bot.send_message(callback.from_user.id, "Введи ID пользователя")
 
 @dp.message_handler(lambda m: m.text.isdigit())
-async def find_user(message: types.Message):
+async def find_user(message):
     if message.from_user.id != ADMIN_ID:
         return
 
     user_id = int(message.text)
-
     cursor.execute("SELECT user_id, username, expire FROM users WHERE user_id=?", (user_id,))
     u = cursor.fetchone()
 
@@ -235,4 +285,5 @@ async def find_user(message: types.Message):
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     loop.create_task(check_payments())
+    loop.create_task(reminders())
     executor.start_polling(dp, skip_updates=True)
