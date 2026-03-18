@@ -7,7 +7,6 @@ from aiogram.utils import executor
 from yookassa import Payment, Configuration
 import os
 
-# ===== НАСТРОЙКИ =====
 API_TOKEN = os.getenv("API_TOKEN")
 SHOP_ID = os.getenv("SHOP_ID")
 SECRET_KEY = os.getenv("SECRET_KEY")
@@ -23,57 +22,60 @@ dp = Dispatcher(bot)
 conn = sqlite3.connect("db.sqlite")
 cursor = conn.cursor()
 
-cursor.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, key TEXT, expire TEXT)")
-cursor.execute("CREATE TABLE IF NOT EXISTS keys (key TEXT PRIMARY KEY, used INTEGER)")
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER PRIMARY KEY,
+    expire TEXT
+)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS payments (
+    user_id INTEGER,
+    amount INTEGER,
+    date TEXT
+)
+""")
+
 conn.commit()
 
-# ===== ВСЕ ТВОИ КЛЮЧИ =====
-keys_list = [
-
-# SERVER 1
-"https://t.me/proxy?server=213.165.42.119&port=10001&secret=6b49b65e410394f11cd429a6b7d84e98",
-"https://t.me/proxy?server=213.165.42.119&port=10002&secret=5a7b65bfda62dda68fab0907fc16724c",
-"https://t.me/proxy?server=213.165.42.119&port=10003&secret=2746c7b761e14fcce479a44c7525b89e",
-"https://t.me/proxy?server=213.165.42.119&port=10004&secret=e16b256b44bb768c129c312282c26044",
-"https://t.me/proxy?server=213.165.42.119&port=10005&secret=2b08a5e3ef56fda24d58039d22a61dc1",
-"https://t.me/proxy?server=213.165.42.119&port=10006&secret=465d5dd479cca63fde250779c98594b7",
-"https://t.me/proxy?server=213.165.42.119&port=10007&secret=4d4b3ddd0b900a482c41cf2a125bd222",
-"https://t.me/proxy?server=213.165.42.119&port=10008&secret=fbe7acf6209794f121215fb7eb8cbb51",
-"https://t.me/proxy?server=213.165.42.119&port=10009&secret=a34fc92f831e33822da49736bf1b481f",
-"https://t.me/proxy?server=213.165.42.119&port=10010&secret=9c069b06630f939c36990d823d02366e",
-
-# SERVER 2
-"https://t.me/proxy?server=64.188.124.119&port=10001&secret=d0fc37c9b37ad8f0b5e9c0a6ab89ddfe",
-"https://t.me/proxy?server=64.188.124.119&port=10002&secret=64238af94b89197bb143be898f3bfaa4",
-"https://t.me/proxy?server=64.188.124.119&port=10003&secret=584833e517aba1d6c40593ca89dd629a",
-"https://t.me/proxy?server=64.188.124.119&port=10004&secret=57712a1e83b40badae453c8c4586b16d",
-"https://t.me/proxy?server=64.188.124.119&port=10005&secret=abcde9aaebd957462c55ba4d965f83f9",
-"https://t.me/proxy?server=64.188.124.119&port=10006&secret=7e1c3911693968f1bacad4da702e2b4a",
-"https://t.me/proxy?server=64.188.124.119&port=10007&secret=dcd8a655cccf1fba6ec8b33841f66d89",
-"https://t.me/proxy?server=64.188.124.119&port=10008&secret=cab71e78310454b0dce0aa2839caa71a",
-"https://t.me/proxy?server=64.188.124.119&port=10009&secret=896ca09c76f69e4c50a3d7d239f398c0",
-"https://t.me/proxy?server=64.188.124.119&port=10010&secret=874bc10369801a0c9b62c52fd10f66d8"
-
+# ===== ПРОКСИ (НОВЫЕ) =====
+PROXIES = [
+"https://t.me/proxy?server=213.165.42.119&port=443&secret=5c95fa91e3ba74956468698b3c3ae6ae",
+"https://t.me/proxy?server=64.188.124.119&port=443&secret=0feeb7f54cbb7b09c6426c1f1cb984b8"
 ]
-
-# записываем ключи в базу
-for k in keys_list:
-    cursor.execute("INSERT OR IGNORE INTO keys VALUES (?, 0)", (k,))
-conn.commit()
 
 payments = {}
 
-# ===== ФУНКЦИИ =====
-def get_key():
-    cursor.execute("SELECT key FROM keys WHERE used=0 LIMIT 1")
-    row = cursor.fetchone()
-    if not row:
-        return None
-    key = row[0]
-    cursor.execute("UPDATE keys SET used=1 WHERE key=?", (key,))
-    conn.commit()
-    return key
+# ===== КНОПКИ =====
+def main_kb():
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("💳 Купить / Продлить", callback_data="buy"))
+    kb.add(types.InlineKeyboardButton("🛠 Поддержка", url="https://t.me/suport_antibloktg"))
+    return kb
 
+def admin_kb():
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("👥 Пользователи", callback_data="users"))
+    kb.add(types.InlineKeyboardButton("💰 Статистика", callback_data="stats"))
+    return kb
+
+# ===== СТАРТ =====
+@dp.message_handler(commands=['start'])
+async def start(message: types.Message):
+    cursor.execute("INSERT OR IGNORE INTO users (user_id, expire) VALUES (?, ?)", (message.from_user.id, "0"))
+    conn.commit()
+
+    await message.answer(
+        "🚀 Telegram без блокировок\n\n"
+        "— Работает на мобильном\n"
+        "— Без лагов\n"
+        "— Несколько серверов\n\n"
+        "Нажми ниже 👇",
+        reply_markup=main_kb()
+    )
+
+# ===== ПОКУПКА =====
 def create_payment(user_id):
     payment = Payment.create({
         "amount": {"value": "149.00", "currency": "RUB"},
@@ -85,22 +87,6 @@ def create_payment(user_id):
     payments[payment.id] = user_id
     return payment.confirmation.confirmation_url
 
-# ===== СТАРТ =====
-@dp.message_handler(commands=['start'])
-async def start(message: types.Message):
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("💳 Купить / Продлить", callback_data="buy"))
-    kb.add(types.InlineKeyboardButton("🛠 Поддержка", url="https://t.me/suport_antibloktg"))
-
-    await message.answer(
-        "🚀 Telegram без блокировок\n\n"
-        "— Быстро\n"
-        "— Без лагов\n"
-        "— 1 устройство = 1 ключ",
-        reply_markup=kb
-    )
-
-# ===== ПОКУПКА =====
 @dp.callback_query_handler(lambda c: c.data == "buy")
 async def buy(callback: types.CallbackQuery):
     url = create_payment(callback.from_user.id)
@@ -110,8 +96,20 @@ async def buy(callback: types.CallbackQuery):
 
     await bot.send_message(callback.from_user.id, "Оплати доступ:", reply_markup=kb)
 
+# ===== ВЫДАЧА ДОСТУПА =====
+def get_proxies_text(expire):
+    text = "✅ Доступ активирован\n\n"
+    text += f"📅 До: {expire}\n\n"
+    text += "🔑 Подключись:\n\n"
+
+    for i, p in enumerate(PROXIES, start=1):
+        text += f"{i}️⃣ {p}\n\n"
+
+    text += "🛠 Поддержка: https://t.me/suport_antibloktg"
+    return text
+
 # ===== ПРОВЕРКА ОПЛАТ =====
-async def check():
+async def check_payments():
     while True:
         for pid in list(payments.keys()):
             payment = Payment.find_one(pid)
@@ -119,33 +117,27 @@ async def check():
             if payment.status == "succeeded":
                 user_id = payments[pid]
 
-                cursor.execute("SELECT key, expire FROM users WHERE user_id=?", (user_id,))
-                user = cursor.fetchone()
+                cursor.execute("SELECT expire FROM users WHERE user_id=?", (user_id,))
+                row = cursor.fetchone()
 
-                if user:
-                    expire = datetime.fromisoformat(user[1])
+                if row and row[0] != "0":
+                    expire = datetime.fromisoformat(row[0])
                     new_expire = max(expire, datetime.now()) + timedelta(days=30)
-
-                    cursor.execute("UPDATE users SET expire=? WHERE user_id=?", (new_expire.isoformat(), user_id))
-
-                    await bot.send_message(user_id, f"🔄 Продлено до {new_expire}")
-
                 else:
-                    key = get_key()
-                    if not key:
-                        await bot.send_message(user_id, "❌ Нет свободных ключей")
-                        continue
+                    new_expire = datetime.now() + timedelta(days=30)
 
-                    expire = datetime.now() + timedelta(days=30)
+                cursor.execute("UPDATE users SET expire=? WHERE user_id=?", (new_expire.isoformat(), user_id))
 
-                    cursor.execute("INSERT INTO users VALUES (?, ?, ?)", (user_id, key, expire.isoformat()))
-
-                    await bot.send_message(
-                        user_id,
-                        f"✅ Доступ выдан\n\n🔐 {key}\n\nДо: {expire}\n\nПоддержка: https://t.me/suport_antibloktg"
-                    )
+                cursor.execute("INSERT INTO payments VALUES (?, ?, ?)",
+                               (user_id, 149, datetime.now().isoformat()))
 
                 conn.commit()
+
+                await bot.send_message(
+                    user_id,
+                    get_proxies_text(new_expire)
+                )
+
                 del payments[pid]
 
         await asyncio.sleep(10)
@@ -156,13 +148,50 @@ async def admin(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
 
-    cursor.execute("SELECT COUNT(*) FROM users")
-    count = cursor.fetchone()[0]
+    await message.answer("⚙️ Админ панель", reply_markup=admin_kb())
 
-    await message.answer(f"👥 Пользователей: {count}")
+# ===== СПИСОК ПОЛЬЗОВАТЕЛЕЙ =====
+@dp.callback_query_handler(lambda c: c.data == "users")
+async def users(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        return
+
+    cursor.execute("SELECT user_id, expire FROM users")
+    data = cursor.fetchall()
+
+    text = "👥 Пользователи:\n\n"
+
+    for u in data[:20]:
+        text += f"{u[0]} | {u[1]}\n"
+
+    await bot.send_message(callback.from_user.id, text)
+
+# ===== СТАТИСТИКА =====
+@dp.callback_query_handler(lambda c: c.data == "stats")
+async def stats(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        return
+
+    cursor.execute("SELECT COUNT(*) FROM users")
+    users_count = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*), SUM(amount) FROM payments")
+    p = cursor.fetchone()
+
+    pays = p[0] if p[0] else 0
+    money = p[1] if p[1] else 0
+
+    text = (
+        f"📊 Статистика\n\n"
+        f"👥 Пользователей: {users_count}\n"
+        f"💳 Оплат: {pays}\n"
+        f"💰 Доход: {money} RUB"
+    )
+
+    await bot.send_message(callback.from_user.id, text)
 
 # ===== ЗАПУСК =====
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
-    loop.create_task(check())
+    loop.create_task(check_payments())
     executor.start_polling(dp, skip_updates=True)
