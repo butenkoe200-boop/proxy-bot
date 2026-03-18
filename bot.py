@@ -35,8 +35,10 @@ CREATE TABLE IF NOT EXISTS users (
 
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS payments (
+    payment_id TEXT PRIMARY KEY,
     user_id INTEGER,
     amount INTEGER,
+    status TEXT,
     date TEXT
 )
 """)
@@ -48,8 +50,6 @@ PROXIES = [
 "https://t.me/proxy?server=213.165.42.119&port=443&secret=5c95fa91e3ba74956468698b3c3ae6ae",
 "https://t.me/proxy?server=64.188.124.119&port=443&secret=0feeb7f54cbb7b09c6426c1f1cb984b8"
 ]
-
-payments = {}
 
 # ===== КНОПКИ =====
 def main_kb():
@@ -70,7 +70,6 @@ def admin_kb():
 # ===== СТАРТ =====
 @dp.message_handler(commands=['start'])
 async def start(message: types.Message):
-
     cursor.execute("""
     INSERT OR REPLACE INTO users (user_id, username, first_name, expire)
     VALUES (?, ?, ?, COALESCE((SELECT expire FROM users WHERE user_id=?), '0'))
@@ -80,17 +79,9 @@ async def start(message: types.Message):
         message.from_user.first_name,
         message.from_user.id
     ))
-
     conn.commit()
 
-    await message.answer(
-        "🚀 Telegram без блокировок\n\n"
-        "— Подключение за 30 секунд\n"
-        "— Работает на мобильном\n"
-        "— Без лагов\n\n"
-        "Нажми ниже 👇",
-        reply_markup=main_kb()
-    )
+    await message.answer("🚀 Telegram без блокировок", reply_markup=main_kb())
 
 # ===== ОПЛАТА =====
 def create_payment(user_id):
@@ -99,9 +90,15 @@ def create_payment(user_id):
         "confirmation": {"type": "redirect", "return_url": "https://t.me/antibloktg_bot"},
         "capture": True,
         "description": str(user_id)
-    }, uuid.uuid4())
+    }, str(uuid.uuid4()))
 
-    payments[payment.id] = user_id
+    # сохраняем в БД
+    cursor.execute("""
+    INSERT INTO payments (payment_id, user_id, amount, status, date)
+    VALUES (?, ?, ?, ?, ?)
+    """, (payment.id, user_id, 149, "pending", datetime.now().isoformat()))
+    conn.commit()
+
     return payment.confirmation.confirmation_url
 
 @dp.callback_query_handler(lambda c: c.data == "buy")
@@ -115,27 +112,22 @@ async def buy(callback: types.CallbackQuery):
 
 # ===== ВЫДАЧА =====
 def get_proxies_message(expire):
-    text = (
-        f"✅ Доступ активирован\n\n"
-        f"📅 До: {expire}\n\n"
-        f"👇 Выбери сервер:"
-    )
-
+    text = f"✅ Доступ активирован\n\nДо: {expire}"
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("🚀 Основной сервер", url=PROXIES[0]))
-    kb.add(types.InlineKeyboardButton("🛟 Резервный сервер", url=PROXIES[1]))
-    kb.add(types.InlineKeyboardButton("🛠 Поддержка", url="https://t.me/suport_antibloktg"))
-
+    kb.add(types.InlineKeyboardButton("🚀 Подключиться", url=PROXIES[0]))
     return text, kb
 
 # ===== ПРОВЕРКА ОПЛАТ =====
 async def check_payments():
     while True:
-        for pid in list(payments.keys()):
+        cursor.execute("SELECT payment_id, user_id FROM payments WHERE status='pending'")
+        rows = cursor.fetchall()
+
+        for pid, user_id in rows:
             payment = Payment.find_one(pid)
 
             if payment.status == "succeeded":
-                user_id = payments[pid]
+                cursor.execute("UPDATE payments SET status='done' WHERE payment_id=?", (pid,))
 
                 cursor.execute("SELECT expire FROM users WHERE user_id=?", (user_id,))
                 row = cursor.fetchone()
@@ -147,110 +139,23 @@ async def check_payments():
                     new_expire = datetime.now() + timedelta(days=30)
 
                 cursor.execute("""
-                UPDATE users 
-                SET expire=?, notified_2days=0, notified_expired=0 
-                WHERE user_id=?
+                UPDATE users SET expire=? WHERE user_id=?
                 """, (new_expire.isoformat(), user_id))
-
-                cursor.execute("INSERT INTO payments VALUES (?, ?, ?)", (user_id, 149, datetime.now().isoformat()))
 
                 conn.commit()
 
                 text, kb = get_proxies_message(new_expire)
-
                 await bot.send_message(user_id, text, reply_markup=kb)
-
-                del payments[pid]
 
         await asyncio.sleep(10)
 
-# ===== УВЕДОМЛЕНИЯ =====
-async def reminders():
-    while True:
-        cursor.execute("SELECT user_id, expire, notified_2days, notified_expired FROM users WHERE expire != '0'")
-        users = cursor.fetchall()
-
-        now = datetime.now()
-
-        for u in users:
-            user_id, exp, n2, ne = u
-            expire = datetime.fromisoformat(exp)
-
-            if 0 < (expire - now).days <= 2 and n2 == 0:
-                await bot.send_message(
-                    user_id,
-                    "⚠️ Осталось меньше 2 дней доступа\n\nПродли сейчас 👇",
-                    reply_markup=types.InlineKeyboardMarkup().add(
-                        types.InlineKeyboardButton("💳 Продлить (149₽)", callback_data="buy")
-                    )
-                )
-                cursor.execute("UPDATE users SET notified_2days=1 WHERE user_id=?", (user_id,))
-                conn.commit()
-
-            if expire < now and ne == 0:
-                await bot.send_message(
-                    user_id,
-                    "❌ Доступ закончился\n\nПродли доступ 👇",
-                    reply_markup=types.InlineKeyboardMarkup().add(
-                        types.InlineKeyboardButton("💳 Продлить (149₽)", callback_data="buy")
-                    )
-                )
-                cursor.execute("UPDATE users SET notified_expired=1 WHERE user_id=?", (user_id,))
-                conn.commit()
-
-        await asyncio.sleep(3600)
-
-# ===== АДМИН =====
-@dp.message_handler(commands=['admin'])
-async def admin(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    await message.answer("⚙️ Админ панель", reply_markup=admin_kb())
-
-@dp.callback_query_handler(lambda c: c.data == "all_users")
-async def all_users(callback: types.CallbackQuery):
-    cursor.execute("SELECT user_id, username, expire FROM users")
-    data = cursor.fetchall()
-
-    text = "👥 Все пользователи:\n\n"
-    for u in data[:30]:
-        username = f"@{u[1]}" if u[1] else "нет"
-        text += f"{u[0]} | {username} | {u[2]}\n"
-
-    await bot.send_message(callback.from_user.id, text)
-
-@dp.callback_query_handler(lambda c: c.data == "active")
-async def active(callback):
-    now = datetime.now().isoformat()
-    cursor.execute("SELECT user_id, username FROM users WHERE expire > ?", (now,))
-    data = cursor.fetchall()
-
-    text = "✅ Активные:\n\n"
-    for u in data[:30]:
-        username = f"@{u[1]}" if u[1] else "нет"
-        text += f"{u[0]} | {username}\n"
-
-    await bot.send_message(callback.from_user.id, text)
-
-@dp.callback_query_handler(lambda c: c.data == "expired")
-async def expired(callback):
-    now = datetime.now().isoformat()
-    cursor.execute("SELECT user_id, username FROM users WHERE expire <= ?", (now,))
-    data = cursor.fetchall()
-
-    text = "❌ Неактивные:\n\n"
-    for u in data[:30]:
-        username = f"@{u[1]}" if u[1] else "нет"
-        text += f"{u[0]} | {username}\n"
-
-    await bot.send_message(callback.from_user.id, text)
-
+# ===== СТАТИСТИКА =====
 @dp.callback_query_handler(lambda c: c.data == "stats")
 async def stats(callback):
     cursor.execute("SELECT COUNT(*) FROM users")
     users_count = cursor.fetchone()[0]
 
-    cursor.execute("SELECT COUNT(*), SUM(amount) FROM payments")
+    cursor.execute("SELECT COUNT(*), SUM(amount) FROM payments WHERE status='done'")
     p = cursor.fetchone()
 
     pays = p[0] if p[0] else 0
@@ -259,29 +164,8 @@ async def stats(callback):
     await bot.send_message(callback.from_user.id,
         f"📊\nПользователей: {users_count}\nОплат: {pays}\nДоход: {money} RUB")
 
-@dp.callback_query_handler(lambda c: c.data == "find")
-async def find(callback):
-    await bot.send_message(callback.from_user.id, "Введи ID пользователя")
-
-@dp.message_handler(lambda m: m.text.isdigit())
-async def find_user(message):
-    if message.from_user.id != ADMIN_ID:
-        return
-
-    user_id = int(message.text)
-    cursor.execute("SELECT user_id, username, expire FROM users WHERE user_id=?", (user_id,))
-    u = cursor.fetchone()
-
-    if not u:
-        await message.answer("❌ Не найден")
-        return
-
-    username = f"@{u[1]}" if u[1] else "нет"
-    await message.answer(f"👤 {u[0]}\n{username}\nДо: {u[2]}")
-
 # ===== ЗАПУСК =====
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     loop.create_task(check_payments())
-    loop.create_task(reminders())
     executor.start_polling(dp, skip_updates=True)
