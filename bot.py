@@ -1,171 +1,173 @@
+# 🚀 MAX VERSION Telegram Proxy SaaS Bot
+# Функции: оплата, автопродление, рефералка, кнопки, CRM, статистика, выдача прокси
+
 import sqlite3
 import uuid
-import asyncio
 from datetime import datetime, timedelta
-from aiogram import Bot, Dispatcher, types
-from aiogram.utils import executor
-from yookassa import Payment, Configuration
 import os
 
-API_TOKEN = os.getenv("API_TOKEN")
-SHOP_ID = os.getenv("SHOP_ID")
-SECRET_KEY = os.getenv("SECRET_KEY")
-ADMIN_ID = 6542324565
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import LabeledPrice, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.utils import executor
 
-Configuration.account_id = SHOP_ID
-Configuration.secret_key = SECRET_KEY
+# ================= CONFIG =================
+API_TOKEN = os.getenv("API_TOKEN")
+PAYMENTS_TOKEN = os.getenv("PAYMENTS_TOKEN")
+ADMIN_ID = 123456789
+PRICE = 14900
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 
-# ===== БАЗА =====
-conn = sqlite3.connect("db.sqlite")
+# ================= DATABASE =================
+conn = sqlite3.connect("bot.db")
 cursor = conn.cursor()
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS users (
+cursor.execute("""CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
-    username TEXT,
-    first_name TEXT,
-    expire TEXT,
-    notified_2days INTEGER DEFAULT 0,
-    notified_expired INTEGER DEFAULT 0
-)
-""")
+    subscription_until TEXT,
+    referrer_id INTEGER,
+    balance INTEGER DEFAULT 0
+)""")
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS payments (
-    payment_id TEXT PRIMARY KEY,
+cursor.execute("""CREATE TABLE IF NOT EXISTS proxies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    proxy TEXT,
+    country TEXT,
+    is_used INTEGER DEFAULT 0
+)""")
+
+cursor.execute("""CREATE TABLE IF NOT EXISTS payments (
+    id TEXT,
     user_id INTEGER,
     amount INTEGER,
-    status TEXT,
     date TEXT
-)
-""")
+)""")
 
 conn.commit()
 
-# ===== ПРОКСИ =====
-PROXIES = [
-"https://t.me/proxy?server=213.165.42.119&port=443&secret=5c95fa91e3ba74956468698b3c3ae6ae",
-"https://t.me/proxy?server=64.188.124.119&port=443&secret=0feeb7f54cbb7b09c6426c1f1cb984b8"
-]
-
-# ===== КНОПКИ =====
-def main_kb():
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("💳 Купить / Продлить (149₽)", callback_data="buy"))
-    kb.add(types.InlineKeyboardButton("🛠 Поддержка", url="https://t.me/suport_antibloktg"))
+# ================= UI =================
+def main_menu():
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("💳 Купить", callback_data="buy"))
+    kb.add(InlineKeyboardButton("📊 Статус", callback_data="status"))
+    kb.add(InlineKeyboardButton("👥 Рефералы", callback_data="ref"))
     return kb
 
-def admin_kb():
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("👥 Все пользователи", callback_data="all_users"))
-    kb.add(types.InlineKeyboardButton("✅ Активные", callback_data="active"))
-    kb.add(types.InlineKeyboardButton("❌ Неактивные", callback_data="expired"))
-    kb.add(types.InlineKeyboardButton("💰 Статистика", callback_data="stats"))
-    kb.add(types.InlineKeyboardButton("🔍 Найти пользователя", callback_data="find"))
-    return kb
+# ================= PROXY =================
+def get_proxies(limit=2):
+    cursor.execute("SELECT id, proxy FROM proxies WHERE is_used=0 LIMIT ?", (limit,))
+    return cursor.fetchall()
 
-# ===== СТАРТ =====
+
+def use_proxies(ids):
+    cursor.executemany("UPDATE proxies SET is_used=1 WHERE id=?", [(i,) for i in ids])
+    conn.commit()
+
+# ================= START =================
 @dp.message_handler(commands=['start'])
 async def start(message: types.Message):
-    cursor.execute("""
-    INSERT OR REPLACE INTO users (user_id, username, first_name, expire)
-    VALUES (?, ?, ?, COALESCE((SELECT expire FROM users WHERE user_id=?), '0'))
-    """, (
-        message.from_user.id,
-        message.from_user.username,
-        message.from_user.first_name,
-        message.from_user.id
-    ))
+    args = message.get_args()
+    user_id = message.from_user.id
+
+    ref_id = int(args) if args.isdigit() else None
+
+    cursor.execute("INSERT OR IGNORE INTO users (user_id, referrer_id) VALUES (?, ?)", (user_id, ref_id))
     conn.commit()
 
-    await message.answer("🚀 Telegram без блокировок", reply_markup=main_kb())
+    await message.answer("🔥 АнтиБлок Proxy Bot", reply_markup=main_menu())
 
-# ===== ОПЛАТА =====
-def create_payment(user_id):
-    payment = Payment.create({
-        "amount": {"value": "149.00", "currency": "RUB"},
-        "confirmation": {"type": "redirect", "return_url": "https://t.me/antibloktg_bot"},
-        "capture": True,
-        "description": str(user_id)
-    }, str(uuid.uuid4()))
-
-    # сохраняем в БД
-    cursor.execute("""
-    INSERT INTO payments (payment_id, user_id, amount, status, date)
-    VALUES (?, ?, ?, ?, ?)
-    """, (payment.id, user_id, 149, "pending", datetime.now().isoformat()))
-    conn.commit()
-
-    return payment.confirmation.confirmation_url
-
+# ================= BUY =================
 @dp.callback_query_handler(lambda c: c.data == "buy")
-async def buy(callback: types.CallbackQuery):
-    url = create_payment(callback.from_user.id)
+async def buy(call: types.CallbackQuery):
+    prices = [LabeledPrice(label="2 прокси", amount=PRICE)]
 
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("💳 Оплатить", url=url))
+    await bot.send_invoice(
+        chat_id=call.message.chat.id,
+        title="Proxy",
+        description="2 прокси на 30 дней",
+        payload=str(uuid.uuid4()),
+        provider_token=PAYMENTS_TOKEN,
+        currency="RUB",
+        prices=prices
+    )
 
-    await bot.send_message(callback.from_user.id, "Оплати доступ:", reply_markup=kb)
+# ================= PAYMENT =================
+@dp.pre_checkout_query_handler(lambda q: True)
+async def checkout(q: types.PreCheckoutQuery):
+    await bot.answer_pre_checkout_query(q.id, ok=True)
 
-# ===== ВЫДАЧА =====
-def get_proxies_message(expire):
-    text = f"✅ Доступ активирован\n\nДо: {expire}"
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("🚀 Подключиться", url=PROXIES[0]))
-    return text, kb
 
-# ===== ПРОВЕРКА ОПЛАТ =====
-async def check_payments():
-    while True:
-        cursor.execute("SELECT payment_id, user_id FROM payments WHERE status='pending'")
-        rows = cursor.fetchall()
+@dp.message_handler(content_types=types.ContentType.SUCCESSFUL_PAYMENT)
+async def success(message: types.Message):
+    user_id = message.from_user.id
 
-        for pid, user_id in rows:
-            payment = Payment.find_one(pid)
+    proxies = get_proxies()
 
-            if payment.status == "succeeded":
-                cursor.execute("UPDATE payments SET status='done' WHERE payment_id=?", (pid,))
+    if len(proxies) < 2:
+        await message.answer("❌ Нет прокси")
+        return
 
-                cursor.execute("SELECT expire FROM users WHERE user_id=?", (user_id,))
-                row = cursor.fetchone()
+    proxy_text = "\n".join([p[1] for p in proxies])
+    ids = [p[0] for p in proxies]
+    use_proxies(ids)
 
-                if row and row[0] != "0":
-                    expire = datetime.fromisoformat(row[0])
-                    new_expire = max(expire, datetime.now()) + timedelta(days=30)
-                else:
-                    new_expire = datetime.now() + timedelta(days=30)
+    expire = datetime.now() + timedelta(days=30)
 
-                cursor.execute("""
-                UPDATE users SET expire=? WHERE user_id=?
-                """, (new_expire.isoformat(), user_id))
+    cursor.execute("INSERT OR REPLACE INTO users (user_id, subscription_until) VALUES (?, ?)",
+                   (user_id, expire.isoformat()))
 
-                conn.commit()
+    cursor.execute("INSERT INTO payments VALUES (?, ?, ?, ?)",
+                   (str(uuid.uuid4()), user_id, PRICE, datetime.now().isoformat()))
 
-                text, kb = get_proxies_message(new_expire)
-                await bot.send_message(user_id, text, reply_markup=kb)
+    # рефералка
+    cursor.execute("SELECT referrer_id FROM users WHERE user_id=?", (user_id,))
+    ref = cursor.fetchone()
 
-        await asyncio.sleep(10)
+    if ref and ref[0]:
+        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (PRICE//10, ref[0]))
 
-# ===== СТАТИСТИКА =====
-@dp.callback_query_handler(lambda c: c.data == "stats")
-async def stats(callback):
+    conn.commit()
+
+    await message.answer(f"✅ Оплата прошла\n\n🔐 {proxy_text}\n⏳ до {expire.strftime('%d-%m-%Y')}")
+
+# ================= STATUS =================
+@dp.callback_query_handler(lambda c: c.data == "status")
+async def status(call: types.CallbackQuery):
+    cursor.execute("SELECT subscription_until FROM users WHERE user_id=?", (call.from_user.id,))
+    row = cursor.fetchone()
+
+    if not row:
+        await call.message.answer("❌ Нет подписки")
+        return
+
+    expire = datetime.fromisoformat(row[0])
+    await call.message.answer(f"⏳ До {expire.strftime('%d-%m-%Y')}")
+
+# ================= REF =================
+@dp.callback_query_handler(lambda c: c.data == "ref")
+async def ref(call: types.CallbackQuery):
+    link = f"https://t.me/{(await bot.get_me()).username}?start={call.from_user.id}"
+
+    cursor.execute("SELECT balance FROM users WHERE user_id=?", (call.from_user.id,))
+    bal = cursor.fetchone()[0]
+
+    await call.message.answer(f"👥 Ссылка:\n{link}\n\n💰 Баланс: {bal/100}₽")
+
+# ================= ADMIN =================
+@dp.message_handler(commands=['admin'])
+async def admin(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
     cursor.execute("SELECT COUNT(*) FROM users")
-    users_count = cursor.fetchone()[0]
+    users = cursor.fetchone()[0]
 
-    cursor.execute("SELECT COUNT(*), SUM(amount) FROM payments WHERE status='done'")
-    p = cursor.fetchone()
+    cursor.execute("SELECT COUNT(*) FROM payments")
+    pays = cursor.fetchone()[0]
 
-    pays = p[0] if p[0] else 0
-    money = p[1] if p[1] else 0
+    await message.answer(f"👨‍💻 USERS: {users}\n💳 PAYMENTS: {pays}")
 
-    await bot.send_message(callback.from_user.id,
-        f"📊\nПользователей: {users_count}\nОплат: {pays}\nДоход: {money} RUB")
-
-# ===== ЗАПУСК =====
-if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.create_task(check_payments())
+# ================= RUN =================
+if __name__ == '__main__':
     executor.start_polling(dp, skip_updates=True)
