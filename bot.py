@@ -238,12 +238,22 @@ async def my_account(callback: types.CallbackQuery):
     )
 
     kb = types.InlineKeyboardMarkup()
-    if not active:
-        kb.add(types.InlineKeyboardButton(f"💳 Купить доступ ({PRICE}₽)", callback_data="buy"))
-    kb.add(types.InlineKeyboardButton("👥 Реферальная программа", callback_data="referral"))
-    kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back_main"))
 
-    await callback.message.edit_text(text, reply_markup=kb)
+    if active:
+        # Показываем прокси прямо в аккаунте
+        text += "\n\n🔌 Ваши серверы для подключения:"
+        kb.add(types.InlineKeyboardButton("🚀 Основной сервер", url=PROXIES[0]))
+        kb.add(types.InlineKeyboardButton("🛟 Резервный сервер", url=PROXIES[1]))
+        kb.add(types.InlineKeyboardButton(f"💳 Продлить ({PRICE}₽)", callback_data="buy"))
+    else:
+        kb.add(types.InlineKeyboardButton(f"💳 Купить доступ ({PRICE}₽)", callback_data="buy"))
+
+    kb.add(types.InlineKeyboardButton("👥 Реферальная программа", callback_data="referral"))
+    kb.add(types.InlineKeyboardButton("🛠 Поддержка", url="https://t.me/suport_antibloktg"))
+
+    # Отправляем новым сообщением — не трогаем предыдущие
+    await callback.message.answer(text, reply_markup=kb)
+    await callback.answer()
 
 # ===== РЕФЕРАЛЬНАЯ СИСТЕМА =====
 @dp.callback_query_handler(lambda c: c.data == "referral")
@@ -277,27 +287,18 @@ async def referral_info(callback: types.CallbackQuery):
         f"💰 Ваш баланс: {balance}₽\n"
         f"📈 Всего заработано: {total_earned}₽\n"
         f"👤 Приглашено: {ref_count} чел.\n"
-        f"{refs_text}\n\n"
-        f"🔗 Ваша реф. ссылка:\n{ref_link}"
+        f"{refs_text}"
     )
 
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("📤 Поделиться ссылкой", switch_inline_query=f"Присоединяйся! {ref_link}"))
-    kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back_main"))
 
-    await callback.message.edit_text(text, reply_markup=kb)
+    # Реф-ссылку оборачиваем в code-тег для удобного копирования
+    text_html = text + f"\n\n🔗 Ваша реф. ссылка:\n<code>{ref_link}</code>"
 
-@dp.callback_query_handler(lambda c: c.data == "back_main")
-async def back_main(callback: types.CallbackQuery):
-    await callback.message.edit_text(
-        "🚀 Telegram без блокировок\n\n"
-        "— Подключение за 30 секунд\n"
-        "— Работает на мобильном\n"
-        "— Без лагов\n\n"
-        f"💳 Цена: {PRICE}₽ / месяц\n\n"
-        "Нажми ниже 👇",
-        reply_markup=main_kb(callback.from_user.id)
-    )
+    # Отправляем новым сообщением — не трогаем предыдущие
+    await callback.message.answer(text_html, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
 
 # ===== ОПЛАТА =====
 def create_payment(user_id):
