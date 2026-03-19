@@ -250,10 +250,30 @@ async def my_account(callback: types.CallbackQuery):
 
     kb.add(types.InlineKeyboardButton("👥 Реферальная программа", callback_data="referral"))
     kb.add(types.InlineKeyboardButton("🛠 Поддержка", url="https://t.me/suport_antibloktg"))
+    kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back_main"))
 
     # Отправляем новым сообщением — не трогаем предыдущие
     await callback.message.answer(text, reply_markup=kb)
     await callback.answer()
+
+@dp.callback_query_handler(lambda c: c.data == "back_main")
+async def back_main(callback: types.CallbackQuery):
+    await callback.message.delete()
+    await callback.message.answer(
+        "🚀 Telegram без блокировок\n\n"
+        "— Подключение за 30 секунд\n"
+        "— Работает на мобильном\n"
+        "— Без лагов\n\n"
+        f"💳 Цена: {PRICE}₽ / месяц\n\n"
+        "Нажми ниже 👇",
+        reply_markup=main_kb(callback.from_user.id)
+    )
+    await callback.answer()
+
+@dp.callback_query_handler(lambda c: c.data == "back_account")
+async def back_account(callback: types.CallbackQuery):
+    await callback.message.delete()
+    await my_account(callback)
 
 # ===== РЕФЕРАЛЬНАЯ СИСТЕМА =====
 @dp.callback_query_handler(lambda c: c.data == "referral")
@@ -292,6 +312,7 @@ async def referral_info(callback: types.CallbackQuery):
 
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("📤 Поделиться ссылкой", switch_inline_query=f"Присоединяйся! {ref_link}"))
+    kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back_account"))
 
     # Реф-ссылку оборачиваем в code-тег для удобного копирования
     text_html = text + f"\n\n🔗 Ваша реф. ссылка:\n<code>{ref_link}</code>"
