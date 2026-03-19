@@ -1,5 +1,5 @@
-# 🚀 MAX VERSION Telegram Proxy SaaS Bot
-# Функции: оплата, автопродление, рефералка, кнопки, CRM, статистика, выдача прокси
+# 🚀 FIXED MAX VERSION Telegram Proxy SaaS Bot
+# Исправлены кнопки, callback'и, admin, UX
 
 import sqlite3
 import uuid
@@ -49,7 +49,7 @@ conn.commit()
 # ================= UI =================
 def main_menu():
     kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("💳 Купить", callback_data="buy"))
+    kb.add(InlineKeyboardButton("🚀 Подключить", callback_data="buy"))
     kb.add(InlineKeyboardButton("📊 Статус", callback_data="status"))
     kb.add(InlineKeyboardButton("👥 Рефералы", callback_data="ref"))
     return kb
@@ -80,6 +80,8 @@ async def start(message: types.Message):
 # ================= BUY =================
 @dp.callback_query_handler(lambda c: c.data == "buy")
 async def buy(call: types.CallbackQuery):
+    await call.answer()
+
     prices = [LabeledPrice(label="2 прокси", amount=PRICE)]
 
     await bot.send_invoice(
@@ -120,7 +122,6 @@ async def success(message: types.Message):
     cursor.execute("INSERT INTO payments VALUES (?, ?, ?, ?)",
                    (str(uuid.uuid4()), user_id, PRICE, datetime.now().isoformat()))
 
-    # рефералка
     cursor.execute("SELECT referrer_id FROM users WHERE user_id=?", (user_id,))
     ref = cursor.fetchone()
 
@@ -134,23 +135,28 @@ async def success(message: types.Message):
 # ================= STATUS =================
 @dp.callback_query_handler(lambda c: c.data == "status")
 async def status(call: types.CallbackQuery):
+    await call.answer()
+
     cursor.execute("SELECT subscription_until FROM users WHERE user_id=?", (call.from_user.id,))
     row = cursor.fetchone()
 
     if not row:
-        await call.message.answer("❌ Нет подписки")
+        await call.message.answer("❌ У тебя нет подписки")
         return
 
     expire = datetime.fromisoformat(row[0])
-    await call.message.answer(f"⏳ До {expire.strftime('%d-%m-%Y')}")
+    await call.message.answer(f"⏳ Подписка до {expire.strftime('%d-%m-%Y')}")
 
 # ================= REF =================
 @dp.callback_query_handler(lambda c: c.data == "ref")
 async def ref(call: types.CallbackQuery):
+    await call.answer()
+
     link = f"https://t.me/{(await bot.get_me()).username}?start={call.from_user.id}"
 
     cursor.execute("SELECT balance FROM users WHERE user_id=?", (call.from_user.id,))
-    bal = cursor.fetchone()[0]
+    bal = cursor.fetchone()
+    bal = bal[0] if bal else 0
 
     await call.message.answer(f"👥 Ссылка:\n{link}\n\n💰 Баланс: {bal/100}₽")
 
@@ -158,6 +164,7 @@ async def ref(call: types.CallbackQuery):
 @dp.message_handler(commands=['admin'])
 async def admin(message: types.Message):
     if message.from_user.id != ADMIN_ID:
+        await message.answer("❌ Нет доступа")
         return
 
     cursor.execute("SELECT COUNT(*) FROM users")
