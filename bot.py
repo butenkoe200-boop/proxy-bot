@@ -7,10 +7,14 @@ from aiogram.utils import executor
 from yookassa import Payment, Configuration
 import os
 
+# ===== НАСТРОЙКИ =====
 API_TOKEN = os.getenv("API_TOKEN")
 SHOP_ID = os.getenv("SHOP_ID")
 SECRET_KEY = os.getenv("SECRET_KEY")
 ADMIN_ID = 6542324565
+
+if not API_TOKEN:
+    raise ValueError("❌ API_TOKEN не найден")
 
 Configuration.account_id = SHOP_ID
 Configuration.secret_key = SECRET_KEY
@@ -45,8 +49,8 @@ conn.commit()
 
 # ===== ПРОКСИ =====
 PROXIES = [
-"https://t.me/proxy?server=213.165.42.119&port=443&secret=5c95fa91e3ba74956468698b3c3ae6ae",
-"https://t.me/proxy?server=64.188.124.119&port=443&secret=0feeb7f54cbb7b09c6426c1f1cb984b8"
+    "https://t.me/proxy?server=213.165.42.119&port=443&secret=5c95fa91e3ba74956468698b3c3ae6ae",
+    "https://t.me/proxy?server=64.188.124.119&port=443&secret=0feeb7f54cbb7b09c6426c1f1cb984b8"
 ]
 
 payments = {}
@@ -70,7 +74,6 @@ def admin_kb():
 # ===== СТАРТ =====
 @dp.message_handler(commands=['start'])
 async def start(message: types.Message):
-
     cursor.execute("""
     INSERT OR REPLACE INTO users (user_id, username, first_name, expire)
     VALUES (?, ?, ?, COALESCE((SELECT expire FROM users WHERE user_id=?), '0'))
@@ -96,7 +99,10 @@ async def start(message: types.Message):
 def create_payment(user_id):
     payment = Payment.create({
         "amount": {"value": "299.00", "currency": "RUB"},
-        "confirmation": {"type": "redirect", "return_url": "https://t.me/antibloktg_bot"},
+        "confirmation": {
+            "type": "redirect",
+            "return_url": "https://t.me/antibloktg_bot"
+        },
         "capture": True,
         "description": str(user_id)
     }, uuid.uuid4())
@@ -132,43 +138,51 @@ def get_proxies_message(expire):
 async def check_payments():
     while True:
         for pid in list(payments.keys()):
-            payment = Payment.find_one(pid)
+            try:
+                payment = Payment.find_one(pid)
 
-            if payment.status == "succeeded":
-                user_id = payments[pid]
+                if payment.status == "succeeded":
+                    user_id = payments[pid]
 
-                cursor.
-execute("SELECT expire FROM users WHERE user_id=?", (user_id,))
-                row = cursor.fetchone()
+                    cursor.execute("SELECT expire FROM users WHERE user_id=?", (user_id,))
+                    row = cursor.fetchone()
 
-                if row and row[0] != "0":
-                    expire = datetime.fromisoformat(row[0])
-                    new_expire = max(expire, datetime.now()) + timedelta(days=30)
-                else:
-                    new_expire = datetime.now() + timedelta(days=30)
+                    if row and row[0] != "0":
+                        expire = datetime.fromisoformat(row[0])
+                        new_expire = max(expire, datetime.now()) + timedelta(days=30)
+                    else:
+                        new_expire = datetime.now() + timedelta(days=30)
 
-                cursor.execute("""
-                UPDATE users 
-                SET expire=?, notified_2days=0, notified_expired=0 
-                WHERE user_id=?
-                """, (new_expire.isoformat(), user_id))
+                    cursor.execute("""
+                    UPDATE users 
+                    SET expire=?, notified_2days=0, notified_expired=0 
+                    WHERE user_id=?
+                    """, (new_expire.isoformat(), user_id))
 
-                cursor.execute("INSERT INTO payments VALUES (?, ?, ?)", (user_id, 299, datetime.now().isoformat()))
+                    cursor.execute(
+                        "INSERT INTO payments VALUES (?, ?, ?)",
+                        (user_id, 299, datetime.now().isoformat())
+                    )
 
-                conn.commit()
+                    conn.commit()
 
-                text, kb = get_proxies_message(new_expire)
+                    text, kb = get_proxies_message(new_expire)
+                    await bot.send_message(user_id, text, reply_markup=kb)
 
-                await bot.send_message(user_id, text, reply_markup=kb)
+                    del payments[pid]
 
-                del payments[pid]
+            except Exception as e:
+                print("Ошибка оплаты:", e)
 
         await asyncio.sleep(10)
 
-# ===== УВЕДОМЛЕНИЯ БЕЗ СПАМА =====
+# ===== УВЕДОМЛЕНИЯ =====
 async def reminders():
     while True:
-        cursor.execute("SELECT user_id, expire, notified_2days, notified_expired FROM users WHERE expire != '0'")
+        cursor.execute("""
+        SELECT user_id, expire, notified_2days, notified_expired 
+        FROM users WHERE expire != '0'
+        """)
         users = cursor.fetchall()
 
         now = datetime.now()
@@ -223,7 +237,7 @@ async def all_users(callback: types.CallbackQuery):
     await bot.send_message(callback.from_user.id, text)
 
 @dp.callback_query_handler(lambda c: c.data == "active")
-async def active(callback):
+async def active(callback: types.CallbackQuery):
     now = datetime.now().isoformat()
     cursor.execute("SELECT user_id, username FROM users WHERE expire > ?", (now,))
     data = cursor.fetchall()
@@ -236,7 +250,7 @@ async def active(callback):
     await bot.send_message(callback.from_user.id, text)
 
 @dp.callback_query_handler(lambda c: c.data == "expired")
-async def expired(callback):
+async def expired(callback: types.CallbackQuery):
     now = datetime.now().isoformat()
     cursor.execute("SELECT user_id, username FROM users WHERE expire <= ?", (now,))
     data = cursor.fetchall()
@@ -249,9 +263,9 @@ async def expired(callback):
     await bot.send_message(callback.from_user.id, text)
 
 @dp.callback_query_handler(lambda c: c.data == "stats")
-async def stats(callback):
+async def stats(callback: types.CallbackQuery):
     cursor.execute("SELECT COUNT(*) FROM users")
-users_count = cursor.fetchone()[0]
+    users_count = cursor.fetchone()[0]
 
     cursor.execute("SELECT COUNT(*), SUM(amount) FROM payments")
     p = cursor.fetchone()
@@ -259,15 +273,17 @@ users_count = cursor.fetchone()[0]
     pays = p[0] if p[0] else 0
     money = p[1] if p[1] else 0
 
-    await bot.send_message(callback.from_user.id,
-        f"📊\nПользователей: {users_count}\nОплат: {pays}\nДоход: {money} RUB")
+    await bot.send_message(
+        callback.from_user.id,
+        f"📊\nПользователей: {users_count}\nОплат: {pays}\nДоход: {money} RUB"
+    )
 
 @dp.callback_query_handler(lambda c: c.data == "find")
-async def find(callback):
+async def find(callback: types.CallbackQuery):
     await bot.send_message(callback.from_user.id, "Введи ID пользователя")
 
 @dp.message_handler(lambda m: m.text.isdigit())
-async def find_user(message):
+async def find_user(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
 
@@ -283,8 +299,10 @@ async def find_user(message):
     await message.answer(f"👤 {u[0]}\n{username}\nДо: {u[2]}")
 
 # ===== ЗАПУСК =====
-if name == "__main__":
+if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     loop.create_task(check_payments())
     loop.create_task(reminders())
+
+    print("🚀 Бот запущен")
     executor.start_polling(dp, skip_updates=True)
